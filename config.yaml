@@ -1,0 +1,24 @@
+# DRM_Blockchain Configuration
+vision:
+  enabled: true
+  camera_id: 1             # ID camera
+  min_detection_confidence: 0.7
+  min_tracking_confidence: 0.5
+  show_window: true         # Hiện cửa sổ camera để debug (có thể tắt khi chạy thực tế)
+  faces_dir: "models/vision/faces"
+  model_name: "ArcFace"
+  detector_backend: "opencv"
+  liveness_enabled: true
+  anti_spoof_threshold: 0.35
+
+embedding:
+  deep_embedding_enabled: false
+
+blockchain:
+  provider: "http://localhost:8545" # Mock or local Ganache/Hardhat
+  contract_address: ""
+  enabled: true
+
+drm:
+  watermark_text: "DRM_PROTECTED"
+  hash_algorithm: "sha256"
