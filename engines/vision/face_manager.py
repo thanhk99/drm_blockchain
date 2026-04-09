@@ -9,7 +9,7 @@ class FaceManager:
     def __init__(self, faces_dir="models/vision/faces"):
         self.faces_dir = faces_dir
         self.model_name = "ArcFace" 
-        self.detector_backend = "opencv" # mediapipe >=0.10 không còn hỗ trợ solutions API cũ
+        self.detector_backend = "opencv" 
         self.threshold = 0.35 # Điều chỉnh ngưỡng khắt khe hơn cho ArcFace
         self.anti_spoofing = True # Kích hoạt Liveness Detection của DeepFace
         
