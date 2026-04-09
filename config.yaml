@@ -1,7 +1,7 @@
 # DRM_Blockchain Configuration
 vision:
   enabled: true
-  camera_id: 1             # ID camera
+  camera_id: 0
   min_detection_confidence: 0.7
   min_tracking_confidence: 0.5
   show_window: true         # Hiện cửa sổ camera để debug (có thể tắt khi chạy thực tế)

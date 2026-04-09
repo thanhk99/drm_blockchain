@@ -2,6 +2,7 @@ import logging
 import time
 import json
 import os
+import hashlib
 
 logger = logging.getLogger("BlockchainManager")
 
@@ -13,21 +14,94 @@ class BlockchainManager:
         """
         self.config = config
         self.ledger_path = "models/blockchain_ledger.json"
+        self.wallet_path = "models/wallets.json"
         self._load_ledger()
+        self._load_wallets()
 
     def _load_ledger(self):
         if os.path.exists(self.ledger_path):
             with open(self.ledger_path, "r", encoding="utf-8") as f:
                 self.ledger = json.load(f)
+            # Kiểm tra xem ledger có hợp lệ không, nếu có dữ liệu cũ không tương thích thì reset
+            if self.ledger and ("hash" not in self.ledger[0] and self.ledger[0].get("index") != 0):
+                logger.warning("Phát hiện dữ liệu blockchain cũ không tương thích. Đang khởi tạo lại...")
+                self.ledger = []
+                self._create_genesis_block()
         else:
             self.ledger = []
-            self._save_ledger()
+            self._create_genesis_block()
+
+    def _create_genesis_block(self):
+        """Khởi tạo khối đầu tiên của chuỗi."""
+        genesis_block = {
+            "index": 0,
+            "timestamp": 1712644800.0, # Một mốc thời gian cố định cho Genesis
+            "hashes": ["0"],
+            "p_hash": "0",
+            "w_hash": "0",
+            "orb_features": None,
+            "owner": "SYSTEM",
+            "previous_hash": "0",
+            "nonce": 0
+        }
+        genesis_block["hash"] = self.calculate_hash(genesis_block)
+        self.ledger.append(genesis_block)
+        self._save_ledger()
+        logger.info("Đã khởi tạo Genesis Block.")
+
+    def calculate_hash(self, block):
+        """Tính toán mã băm SHA-256 cho một khối."""
+        # Tạo một bản sao để không ảnh hưởng đến khối gốc và loại bỏ trường hash nếu có
+        block_copy = {k: v for k, v in block.items() if k != "hash"}
+        # Đảm bảo thứ tự các key là cố định để hash luôn giống nhau
+        block_string = json.dumps(block_copy, sort_keys=True).encode()
+        return hashlib.sha256(block_string).hexdigest()
+
+    def proof_of_work(self, block, difficulty=2):
+        """Cơ chế Proof of Work đơn giản: tìm nonce để hash có số lượng số 0 đầu tiên nhất định."""
+        target = "0" * difficulty
+        while True:
+            hash_attempt = self.calculate_hash(block)
+            if hash_attempt[:difficulty] == target:
+                block["hash"] = hash_attempt
+                return block
+            block["nonce"] += 1
 
     def _save_ledger(self):
         # Đảm bảo thư mục tồn tại
         os.makedirs(os.path.dirname(self.ledger_path), exist_ok=True)
         with open(self.ledger_path, "w", encoding="utf-8") as f:
             json.dump(self.ledger, f, indent=4)
+
+    def _load_wallets(self):
+        """Tải dữ liệu ví từ file JSON."""
+        if os.path.exists(self.wallet_path):
+            with open(self.wallet_path, "r", encoding="utf-8") as f:
+                self.wallets = json.load(f)
+        else:
+            self.wallets = {}
+            self._save_wallets()
+
+    def _save_wallets(self):
+        """Lưu dữ liệu ví vào file JSON."""
+        os.makedirs(os.path.dirname(self.wallet_path), exist_ok=True)
+        with open(self.wallet_path, "w", encoding="utf-8") as f:
+            json.dump(self.wallets, f, indent=4)
+
+    def get_balance(self, username):
+        """Lấy số dư của một người dùng."""
+        return self.wallets.get(username, 0)
+
+    def grant_reward(self, username, amount=10):
+        """Tặng thưởng coin cho người dùng."""
+        if username == "Unknown" or username == "Guest":
+            return False
+            
+        current_balance = self.wallets.get(username, 0)
+        self.wallets[username] = current_balance + amount
+        self._save_wallets()
+        logger.info(f"Đã tặng {amount} Coins cho {username}. Số dư mới: {self.wallets[username]}")
+        return True
 
     def register_copyright(self, hash_list, p_hash, w_hash, orb_features, owner_name):
         """
@@ -36,28 +110,64 @@ class BlockchainManager:
         if isinstance(hash_list, str):
             hash_list = [hash_list]
 
-        # Kiểm tra trùng lặp tuyệt đối
+        # Kiểm tra trùng lặp
         for entry in self.ledger:
-            existing_hashes = entry.get("hashes", [entry.get("hash")])
+            existing_hashes = entry.get("hashes", [])
             for h in hash_list:
                 if h in existing_hashes:
                     return False, f"Ảnh này đã được đăng ký bởi {entry['owner']}"
 
+        # Lấy hash của khối cuối cùng
+        last_block = self.ledger[-1]
+        
         new_block = {
-            "index": len(self.ledger) + 1,
+            "index": len(self.ledger),
             "timestamp": time.time(),
             "hashes": hash_list,
             "p_hash": p_hash,
             "w_hash": w_hash,
-            "orb_features": orb_features, # Lưu đặc trưng hình học
+            "orb_features": orb_features,
             "owner": owner_name,
-            "previous_hash": self.ledger[-1].get("hashes", [self.ledger[-1].get("hash", "0")])[0] if self.ledger else "0"
+            "previous_hash": last_block["hash"],
+            "nonce": 0
         }
+        
+        # Thực hiện Proof of Work
+        logger.info(f"Đang đào khối mới cho {owner_name}...")
+        new_block = self.proof_of_work(new_block)
         
         self.ledger.append(new_block)
         self._save_ledger()
-        logger.info(f"Đã ghi nhận bản quyền ORB cho {owner_name}")
-        return True, "Đã lưu lên Blockchain thành công (ORB)."
+        
+        # Tặng thưởng sau khi đào khối thành công
+        reward_given = self.grant_reward(owner_name)
+        reward_msg = f" (Nhận thêm 10 Coins thưởng!)" if reward_given else ""
+        
+        logger.info(f"Đã ghi nhận bản quyền trên blockchain với mã băm: {new_block['hash'][:10]}...")
+        return True, f"Lưu thành công!{reward_msg} Mã băm khối: {new_block['hash'][:10]}..."
+
+    def is_chain_valid(self):
+        """Kiểm tra tính toàn vẹn của toàn bộ chuỗi blockchain."""
+        for i in range(1, len(self.ledger)):
+            current_block = self.ledger[i]
+            previous_block = self.ledger[i-1]
+
+            # 1. Kiểm tra mã băm hiện tại của khối
+            if current_block["hash"] != self.calculate_hash(current_block):
+                logger.error(f"Lỗi: Khối {i} bị thay đổi nội dung!")
+                return False
+
+            # 2. Kiểm tra liên kết với khối trước
+            if current_block["previous_hash"] != previous_block["hash"]:
+                logger.error(f"Lỗi: Khối {i} không liên kết đúng với khối {i-1}!")
+                return False
+                
+            # 3. Kiểm tra Proof of Work (độ khó 2)
+            if current_block["hash"][:2] != "00":
+                logger.error(f"Lỗi: Khối {i} không thỏa mãn Proof of Work!")
+                return False
+
+        return True
 
     def verify_copyright(self, image_hash, current_p_hash=None, current_w_hash=None, current_image=None):
         """

@@ -94,6 +94,18 @@ class DRMAppGUI:
         
         self.log_area = None
         self._setup_ui()
+        
+        # Kiểm tra tính toàn vẹn blockchain ngay khi khởi động
+        self._check_blockchain_integrity()
+
+    def _check_blockchain_integrity(self):
+        """Kiểm tra và thông báo trạng thái blockchain."""
+        self.log("Đang kiểm tra tính toàn vẹn của hệ thống Blockchain...")
+        if self.blockchain.is_chain_valid():
+            self.log("TRẠNG THÁI: [SECURE] Blockchain hợp lệ và an toàn.")
+        else:
+            self.log("CẢNH BÁO: [TAMPERED] Phát hiện dấu hiệu chỉnh sửa dữ liệu trái phép!")
+            messagebox.showwarning("Cảnh báo Bảo mật", "Hệ thống Blockchain phát hiện dữ liệu có dấu hiệu bị can thiệp trái phép!")
 
     def _setup_ui(self):
         # Title
@@ -123,6 +135,9 @@ class DRMAppGUI:
                   font=("Helvetica", 12), width=20, pady=10, bg="#3498db", fg="white", activebackground="#2980b9").pack(pady=10)
         
         tk.Label(btn_frame, text="---", bg="#2c3e50", fg="#7f8c8d").pack(pady=5)
+        tk.Button(btn_frame, text="4. Kiểm tra Blockchain", command=self._check_blockchain_integrity, 
+                  font=("Helvetica", 10), width=20, pady=5, bg="#95a5a6", fg="white", activebackground="#7f8c8d").pack(pady=5)
+        
         tk.Button(btn_frame, text="Thoát", command=self.root.quit, bg="#e74c3c", fg="white", width=20).pack(pady=10)
 
         # Log Frame
@@ -257,8 +272,10 @@ class DRMAppGUI:
 
             user = self.security.authenticate(frame)
             if user != "Unknown" and user != "Guest":
+                balance = self.blockchain.get_balance(user)
                 self.log(f"Xác thực thành công: CHÀO {user.upper()}")
-                messagebox.showinfo("FaceID", f"Xin chào {user}!")
+                self.log(f"Số dư Ví: {balance} DRM Coins")
+                messagebox.showinfo("FaceID", f"Xin chào {user}!\nSố dư hiện tại: {balance} DRM Coins")
             else:
                 self.log("Cảnh báo: Không nhận diện được người dùng.")
                 messagebox.showwarning("FaceID", "Không nhận diện được khuôn mặt.")
@@ -287,6 +304,9 @@ class DRMAppGUI:
                 self.log("Thất bại: Bạn không có quyền đăng ký bản quyền.")
                 messagebox.showerror("Lỗi", "Vui lòng xác thực khuôn mặt chủ sở hữu đã đăng ký.")
                 return
+
+            balance = self.blockchain.get_balance(user)
+            self.log(f"Đã xác thực: {user} (Số dư hiện tại: {balance} Coins)")
 
             # Bước 2: Xử lý DRM - Tạo ảnh bảo vệ trước
             self.log("Bước 2: Đang thực hiện gắn dấu bảo vệ DRM...")
