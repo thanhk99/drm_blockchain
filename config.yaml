@@ -2,6 +2,9 @@
 vision:
   enabled: true
   camera_id: 0
+  # iRun Cam: đặt use_irun_cam: true và nhập IP của điện thoại
+  use_irun_cam: false
+  irun_cam_url: "http://192.168.1.100:4747/video"  # Đổi IP theo điện thoại
   min_detection_confidence: 0.7
   min_tracking_confidence: 0.5
   show_window: true         # Hiện cửa sổ camera để debug (có thể tắt khi chạy thực tế)
@@ -18,6 +21,7 @@ blockchain:
   provider: "http://localhost:8545" # Mock or local Ganache/Hardhat
   contract_address: ""
   enabled: true
+  pow_difficulty: 4
 
 drm:
   watermark_text: "DRM_PROTECTED"

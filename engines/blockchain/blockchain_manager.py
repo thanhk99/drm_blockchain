@@ -3,28 +3,102 @@ import time
 import json
 import os
 import hashlib
+import hmac
+import secrets
+import base64
+from cryptography.fernet import Fernet
 
 logger = logging.getLogger("BlockchainManager")
 
 class BlockchainManager:
     def __init__(self, config):
         """
-        Khởi tạo Blockchain Manager. 
-        Trong bản demo này, chúng ta sẽ mô phỏng một sổ cái (ledger) bằng file JSON cục bộ.
+        Khởi tạo Blockchain Manager.
+        Sổ cái được mô phỏng bằng JSON cục bộ + bảo vệ bằng HMAC.
         """
         self.config = config
         self.ledger_path = "models/blockchain_ledger.json"
         self.wallet_path = "models/wallets.json"
+        self.secret_path = "models/.ledger_secret"
+        self.sig_path = "models/ledger.sig"
+        # Đọc difficulty từ config, mặc định 4
+        self.difficulty = self.config.get("blockchain", {}).get("pow_difficulty", 4)
+        self._secret_key = self._get_or_create_secret_key()
+        self._cipher = Fernet(base64.urlsafe_b64encode(self._secret_key[:32]))
         self._load_ledger()
         self._load_wallets()
+
+    def _get_or_create_secret_key(self) -> bytes:
+        """Đọc từ biến môi trường hoặc file, hoặc tạo mới secret key."""
+        # Ưu tiên biến môi trường (Bảo mật cao nhất)
+        env_key = os.getenv("DRM_LEDGER_SECRET")
+        if env_key:
+            try:
+                return bytes.fromhex(env_key)
+            except ValueError:
+                logger.warning("Bien moi truong DRM_LEDGER_SECRET khong hop le (phai la hex).")
+
+        os.makedirs(os.path.dirname(self.secret_path), exist_ok=True)
+        if os.path.exists(self.secret_path):
+            with open(self.secret_path, "r") as f:
+                return bytes.fromhex(f.read().strip())
+        
+        # Tạo key mới 32 bytes
+        key = secrets.token_hex(32)
+        with open(self.secret_path, "w") as f:
+            f.write(key)
+        logger.info("Da tao secret key moi cho HMAC/Encryption ledger.")
+        return bytes.fromhex(key)
+
+    def _encrypt_data(self, data) -> str:
+        """Mã hóa dữ liệu sang chuỗi base64."""
+        if data is None: return None
+        json_data = json.dumps(data)
+        return self._cipher.encrypt(json_data.encode()).decode()
+
+    def _decrypt_data(self, encrypted_str: str):
+        """Giải mã dữ liệu từ chuỗi base64."""
+        if encrypted_str is None or not isinstance(encrypted_str, str): 
+            return encrypted_str # Trả về luôn nếu không phải chuỗi mã hóa
+        try:
+            decrypted_data = self._cipher.decrypt(encrypted_str.encode()).decode()
+            return json.loads(decrypted_data)
+        except Exception as e:
+            logger.error(f"Loi giai ma du lieu: {e}")
+            return None
+
+    def _sign_ledger(self, content: str) -> str:
+        """Tính HMAC-SHA256 của nội dung ledger."""
+        return hmac.new(self._secret_key, content.encode("utf-8"), hashlib.sha256).hexdigest()
+
+    def _verify_ledger_signature(self, content: str) -> bool:
+        """Kiểm tra chữ ký HMAC. Trả về False nếu file bị sửa."""
+        if not os.path.exists(self.sig_path):
+            logger.warning("Khong tim thay file chu ky HMAC. Ledger co the bi can thiep!")
+            return False
+        with open(self.sig_path, "r") as f:
+            stored_sig = f.read().strip()
+        expected_sig = self._sign_ledger(content)
+        # So sánh constant-time để chống timing attack
+        return hmac.compare_digest(stored_sig, expected_sig)
 
     def _load_ledger(self):
         if os.path.exists(self.ledger_path):
             with open(self.ledger_path, "r", encoding="utf-8") as f:
-                self.ledger = json.load(f)
-            # Kiểm tra xem ledger có hợp lệ không, nếu có dữ liệu cũ không tương thích thì reset
+                raw_content = f.read()
+
+            # Xác minh HMAC trước khi dùng
+            if not self._verify_ledger_signature(raw_content):
+                logger.error("CANH BAO BAO MAT: Ledger bi can thiep trai phep hoac chua co chu ky!")
+                # Ghi lại genesis block an toàn
+                self.ledger = []
+                self._create_genesis_block()
+                return
+
+            self.ledger = json.loads(raw_content)
+            # Kiểm tra tương thích dữ liệu cũ
             if self.ledger and ("hash" not in self.ledger[0] and self.ledger[0].get("index") != 0):
-                logger.warning("Phát hiện dữ liệu blockchain cũ không tương thích. Đang khởi tạo lại...")
+                logger.warning("Du lieu blockchain cu khong tuong thich. Dang khoi tao lai...")
                 self.ledger = []
                 self._create_genesis_block()
         else:
@@ -57,8 +131,10 @@ class BlockchainManager:
         block_string = json.dumps(block_copy, sort_keys=True).encode()
         return hashlib.sha256(block_string).hexdigest()
 
-    def proof_of_work(self, block, difficulty=2):
-        """Cơ chế Proof of Work đơn giản: tìm nonce để hash có số lượng số 0 đầu tiên nhất định."""
+    def proof_of_work(self, block, difficulty=None):
+        """Proof of Work: tìm nonce để hash bắt đầu bằng n số 0 (difficulty từ config)."""
+        if difficulty is None:
+            difficulty = self.difficulty
         target = "0" * difficulty
         while True:
             hash_attempt = self.calculate_hash(block)
@@ -68,10 +144,16 @@ class BlockchainManager:
             block["nonce"] += 1
 
     def _save_ledger(self):
-        # Đảm bảo thư mục tồn tại
+        """Lưu ledger và cập nhật chữ ký HMAC."""
         os.makedirs(os.path.dirname(self.ledger_path), exist_ok=True)
+        content = json.dumps(self.ledger, indent=4)
         with open(self.ledger_path, "w", encoding="utf-8") as f:
-            json.dump(self.ledger, f, indent=4)
+            f.write(content)
+        # Ký file sau khi ghi
+        sig = self._sign_ledger(content)
+        with open(self.sig_path, "w") as f:
+            f.write(sig)
+        logger.debug("Da luu ledger va cap nhat chu ky HMAC.")
 
     def _load_wallets(self):
         """Tải dữ liệu ví từ file JSON."""
@@ -107,6 +189,10 @@ class BlockchainManager:
         """
         Ghi nhận bản quyền với Dual-Hash, pHash, wHash và ORB Features.
         """
+        # Kiểm tra tính toàn vẹn của chuỗi hiện tại trước khi ghi mới
+        if not self._verify_ledger_signature(json.dumps(self.ledger, indent=4)):
+            return False, "Hệ thống bị can thiệp! Không thể ghi dữ liệu mới."
+
         if isinstance(hash_list, str):
             hash_list = [hash_list]
 
@@ -126,7 +212,7 @@ class BlockchainManager:
             "hashes": hash_list,
             "p_hash": p_hash,
             "w_hash": w_hash,
-            "orb_features": orb_features,
+            "orb_features": self._encrypt_data(orb_features), # Mã hóa dữ liệu nhạy cảm
             "owner": owner_name,
             "previous_hash": last_block["hash"],
             "nonce": 0
@@ -147,24 +233,25 @@ class BlockchainManager:
         return True, f"Lưu thành công!{reward_msg} Mã băm khối: {new_block['hash'][:10]}..."
 
     def is_chain_valid(self):
-        """Kiểm tra tính toàn vẹn của toàn bộ chuỗi blockchain."""
+        """Kiểm tra tính toàn vẹn của toàn bộ chain."""
+        pow_prefix = "0" * self.difficulty
         for i in range(1, len(self.ledger)):
             current_block = self.ledger[i]
             previous_block = self.ledger[i-1]
 
-            # 1. Kiểm tra mã băm hiện tại của khối
+            # 1. Hash nội dung khối phải khớp
             if current_block["hash"] != self.calculate_hash(current_block):
-                logger.error(f"Lỗi: Khối {i} bị thay đổi nội dung!")
+                logger.error(f"Loi: Khoi {i} bi thay doi noi dung!")
                 return False
 
-            # 2. Kiểm tra liên kết với khối trước
+            # 2. Liên kết với khối trước phải đúng
             if current_block["previous_hash"] != previous_block["hash"]:
-                logger.error(f"Lỗi: Khối {i} không liên kết đúng với khối {i-1}!")
+                logger.error(f"Loi: Khoi {i} khong lien ket dung voi khoi {i-1}!")
                 return False
-                
-            # 3. Kiểm tra Proof of Work (độ khó 2)
-            if current_block["hash"][:2] != "00":
-                logger.error(f"Lỗi: Khối {i} không thỏa mãn Proof of Work!")
+
+            # 3. Proof of Work phải thỏa mãn difficulty hiện tại
+            if not current_block["hash"].startswith(pow_prefix):
+                logger.error(f"Loi: Khoi {i} khong thoa man Proof of Work (difficulty={self.difficulty})!")
                 return False
 
         return True
@@ -213,7 +300,8 @@ class BlockchainManager:
             current_orb = ImageHasher.get_orb_features(current_image)
             if current_orb:
                 for entry in self.ledger:
-                    target_orb = entry.get("orb_features")
+                    encrypted_orb = entry.get("orb_features")
+                    target_orb = self._decrypt_data(encrypted_orb) # Giải mã để so sánh
                     if target_orb:
                         match_ratio = ImageHasher.match_orb_features(current_orb, target_orb)
                         # Ngưỡng 0.15 (15%) là đủ để xác nhận ảnh bị xoay/cắt

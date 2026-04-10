@@ -156,20 +156,40 @@ class DRMAppGUI:
         logger.info(message)
 
     def _open_camera(self, cam_id):
-        """Hàm helper để mở camera với nhiều backend trên Windows."""
-        if cam_id is None: return None
-        
-        # Thử các backend khác nhau trên Windows
+        """Mở camera: hỗ trợ iRun Cam (URL) hoặc webcam thông thường."""
+        vision_cfg = self.config.get("vision", {})
+        use_irun = vision_cfg.get("use_irun_cam", False)
+
+        if use_irun:
+            url = vision_cfg.get("irun_cam_url", "").strip()
+            if not url:
+                self.log("Lỗi: Chưa cấu hình irun_cam_url trong config.yaml")
+                return None
+            self.log(f"Đang kết nối iRun Cam tại: {url}")
+            try:
+                cap = cv2.VideoCapture(url)
+                # Thử đọc vài frame để xác nhận kết nối
+                for _ in range(10):
+                    ret, frame = cap.read()
+                    if ret:
+                        self.log("Thành công! Đã kết nối iRun Cam.")
+                        return cap
+                cap.release()
+                self.log("Lỗi: Không nhận được dữ liệu từ iRun Cam. Kiểm tra IP/port.")
+            except Exception as e:
+                logger.error(f"Lỗi kết nối iRun Cam: {e}")
+            return None
+
+        # --- Webcam thông thường ---
+        if cam_id is None:
+            return None
         backends = [cv2.CAP_DSHOW, None, cv2.CAP_MSMF]
-        
         for backend in backends:
             name = "Mặc định" if backend is None else ("DSHOW" if backend == cv2.CAP_DSHOW else "MSMF")
             try:
                 self.log(f"Đang thử mở Camera {cam_id} với driver: {name}...")
                 cap = cv2.VideoCapture(cam_id + (backend if backend else 0))
-                
                 if cap.isOpened():
-                    # Đọc thử vài frame để kiểm tra hối đáp (tránh màn hình xanh/đen)
                     for _ in range(5):
                         ret, frame = cap.read()
                         if ret:
@@ -178,15 +198,16 @@ class DRMAppGUI:
                     cap.release()
             except Exception as e:
                 logger.error(f"Lỗi khi thử driver {name}: {e}")
-                
         return None
 
     def _get_frame_from_camera(self, title="Camera View", mode="verify"):
         """Hiển thị cửa sổ Live View và trả về frame người dùng chụp."""
-        cam_id = self.config.get("vision", {}).get("camera_id", 0)
+        vision_cfg = self.config.get("vision", {})
+        cam_id = vision_cfg.get("camera_id", 0)
         cap = self._open_camera(cam_id)
         if not cap:
-            messagebox.showerror("Lỗi", "Không thể mở camera.")
+            src = vision_cfg.get("irun_cam_url", "camera") if vision_cfg.get("use_irun_cam") else cam_id
+            messagebox.showerror("Lỗi Camera", f"Không thể mở nguồn camera:\n{src}\n\nKiểm tra kết nối hoặc IP.")
             return None
         
         dialog = CameraDialog(self.root, title=title, mode=mode)
