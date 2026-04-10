@@ -3,104 +3,143 @@ import time
 import json
 import os
 import hashlib
-import hmac
-import secrets
 import base64
-from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ed25519
 
 logger = logging.getLogger("BlockchainManager")
 
 class BlockchainManager:
-    def __init__(self, config):
+    def __init__(self, config, node_name="Default"):
         """
-        Khởi tạo Blockchain Manager.
-        Sổ cái được mô phỏng bằng JSON cục bộ + bảo vệ bằng HMAC.
+        Khởi tạo Blockchain Manager cho một Node cụ thể.
+        Mỗi node có thư mục riêng, sổ cái riêng và cặp khóa Ed25519 riêng.
         """
         self.config = config
-        self.ledger_path = "models/blockchain_ledger.json"
-        self.wallet_path = "models/wallets.json"
-        self.secret_path = "models/.ledger_secret"
-        self.sig_path = "models/ledger.sig"
+        self.node_name = node_name
+        self.base_dir = f"nodes/{node_name}"
+        
+        self.ledger_path = os.path.join(self.base_dir, "ledger.json")
+        self.wallet_path = os.path.join(self.base_dir, "wallets.json")
+        self.key_dir = os.path.join(self.base_dir, "keys")
+        self.priv_key_path = os.path.join(self.key_dir, "private.pem")
+        self.pub_key_path = os.path.join(self.key_dir, "public.pem")
+        
         # Đọc difficulty từ config, mặc định 4
         self.difficulty = self.config.get("blockchain", {}).get("pow_difficulty", 4)
-        self._secret_key = self._get_or_create_secret_key()
-        self._cipher = Fernet(base64.urlsafe_b64encode(self._secret_key[:32]))
+        
+        # Đảm bảo thư mục tồn tại
+        os.makedirs(self.key_dir, exist_ok=True)
+        
+        # Khởi tạo khóa và tải dữ liệu
+        self._private_key, self._public_key = self._load_or_generate_keys()
         self._load_ledger()
         self._load_wallets()
 
-    def _get_or_create_secret_key(self) -> bytes:
-        """Đọc từ biến môi trường hoặc file, hoặc tạo mới secret key."""
-        # Ưu tiên biến môi trường (Bảo mật cao nhất)
-        env_key = os.getenv("DRM_LEDGER_SECRET")
-        if env_key:
-            try:
-                return bytes.fromhex(env_key)
-            except ValueError:
-                logger.warning("Bien moi truong DRM_LEDGER_SECRET khong hop le (phai la hex).")
-
-        os.makedirs(os.path.dirname(self.secret_path), exist_ok=True)
-        if os.path.exists(self.secret_path):
-            with open(self.secret_path, "r") as f:
-                return bytes.fromhex(f.read().strip())
+    def _load_or_generate_keys(self):
+        """Tải cặp khóa Ed25519 từ file hoặc tạo mới nếu chưa có."""
+        if os.path.exists(self.priv_key_path) and os.path.exists(self.pub_key_path):
+            with open(self.priv_key_path, "rb") as f:
+                private_key = serialization.load_pem_private_key(f.read(), password=None)
+            with open(self.pub_key_path, "rb") as f:
+                public_key = serialization.load_pem_public_key(f.read())
+            return private_key, public_key
         
-        # Tạo key mới 32 bytes
-        key = secrets.token_hex(32)
-        with open(self.secret_path, "w") as f:
-            f.write(key)
-        logger.info("Da tao secret key moi cho HMAC/Encryption ledger.")
-        return bytes.fromhex(key)
+        # Tạo khóa mới
+        private_key = ed25519.Ed25519PrivateKey.generate()
+        public_key = private_key.public_key()
+        
+        # Lưu Private Key
+        with open(self.priv_key_path, "wb") as f:
+            f.write(private_key.private_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PrivateFormat.PKCS8,
+                encryption_algorithm=serialization.NoEncryption()
+            ))
+            
+        # Lưu Public Key
+        with open(self.pub_key_path, "wb") as f:
+            f.write(public_key.public_bytes(
+                encoding=serialization.Encoding.PEM,
+                format=serialization.PublicFormat.SubjectPublicKeyInfo
+            ))
+            
+        logger.info(f"Da tao cap khoa Ed25519 moi cho node: {self.node_name}")
+        return private_key, public_key
 
     def _encrypt_data(self, data) -> str:
-        """Mã hóa dữ liệu sang chuỗi base64."""
+        """Mã hóa dữ liệu đơn giản sang base64 (chỉ để giả lập, không phải bảo mật thực)."""
         if data is None: return None
         json_data = json.dumps(data)
-        return self._cipher.encrypt(json_data.encode()).decode()
+        return base64.b64encode(json_data.encode()).decode()
 
-    def _decrypt_data(self, encrypted_str: str):
-        """Giải mã dữ liệu từ chuỗi base64."""
-        if encrypted_str is None or not isinstance(encrypted_str, str): 
-            return encrypted_str # Trả về luôn nếu không phải chuỗi mã hóa
+    def _decrypt_data(self, encoded_str: str):
+        """Giải mã dữ liệu từ base64."""
+        if encoded_str is None or not isinstance(encoded_str, str): 
+            return encoded_str
         try:
-            decrypted_data = self._cipher.decrypt(encrypted_str.encode()).decode()
-            return json.loads(decrypted_data)
-        except Exception as e:
-            logger.error(f"Loi giai ma du lieu: {e}")
+            return json.loads(base64.b64decode(encoded_str.encode()).decode())
+        except Exception:
             return None
 
-    def _sign_ledger(self, content: str) -> str:
-        """Tính HMAC-SHA256 của nội dung ledger."""
-        return hmac.new(self._secret_key, content.encode("utf-8"), hashlib.sha256).hexdigest()
+    def _get_peer_public_key(self, node_name: str):
+        """Tải Public Key của một node khác từ thư mục của họ."""
+        pub_path = f"nodes/{node_name}/keys/public.pem"
+        if not os.path.exists(pub_path):
+            return None
+        try:
+            with open(pub_path, "rb") as f:
+                return serialization.load_pem_public_key(f.read())
+        except Exception:
+            return None
 
-    def _verify_ledger_signature(self, content: str) -> bool:
-        """Kiểm tra chữ ký HMAC. Trả về False nếu file bị sửa."""
-        if not os.path.exists(self.sig_path):
-            logger.warning("Khong tim thay file chu ky HMAC. Ledger co the bi can thiep!")
+    def _sign_block(self, block_data: dict) -> str:
+        """Ký một khối bằng Private Key của node."""
+        # Gom các trường để ký (ngoại trừ chính trường signature)
+        block_copy = {k: v for k, v in block_data.items() if k != "signature"}
+        message = json.dumps(block_copy, sort_keys=True).encode()
+        signature = self._private_key.sign(message)
+        return base64.b64encode(signature).decode()
+
+    def _verify_block_signature(self, block_data: dict) -> bool:
+        """
+        Xác thực chữ ký của một khối. 
+        Tự động tìm Public Key dựa trên trường 'owner' của khối.
+        """
+        if "signature" not in block_data:
             return False
-        with open(self.sig_path, "r") as f:
-            stored_sig = f.read().strip()
-        expected_sig = self._sign_ledger(content)
-        # So sánh constant-time để chống timing attack
-        return hmac.compare_digest(stored_sig, expected_sig)
+            
+        owner = block_data.get("owner", "System")
+        
+        # Nếu là mình ký, dùng khóa của mình. Nếu là người khác, tìm khóa của họ.
+        if owner == self.node_name or owner == "System":
+            pub_key = self._public_key
+        else:
+            pub_key = self._get_peer_public_key(owner)
+            
+        if not pub_key:
+            logger.warning(f"Khong tim thay Public Key cho owner: {owner}")
+            return False
+
+        block_copy = {k: v for k, v in block_data.items() if k != "signature"}
+        message = json.dumps(block_copy, sort_keys=True).encode()
+        try:
+            signature = base64.b64decode(block_data["signature"])
+            pub_key.verify(signature, message)
+            return True
+        except Exception:
+            return False
+
 
     def _load_ledger(self):
         if os.path.exists(self.ledger_path):
             with open(self.ledger_path, "r", encoding="utf-8") as f:
-                raw_content = f.read()
-
-            # Xác minh HMAC trước khi dùng
-            if not self._verify_ledger_signature(raw_content):
-                logger.error("CANH BAO BAO MAT: Ledger bi can thiep trai phep hoac chua co chu ky!")
-                # Ghi lại genesis block an toàn
-                self.ledger = []
-                self._create_genesis_block()
-                return
-
-            self.ledger = json.loads(raw_content)
-            # Kiểm tra tương thích dữ liệu cũ
-            if self.ledger and ("hash" not in self.ledger[0] and self.ledger[0].get("index") != 0):
-                logger.warning("Du lieu blockchain cu khong tuong thich. Dang khoi tao lai...")
-                self.ledger = []
-                self._create_genesis_block()
+                self.ledger = json.load(f)
+            
+            # Kiểm tra tính toàn vẹn của chuỗi (bao gồm chữ ký số) ngay khi tải
+            if not self.is_chain_valid():
+                logger.error(f"CANH BAO BAO MAT: Sổ cái của node {self.node_name} bị can thiệp trái phép!")
+                # Trong thực tế sẽ cần cơ chế đồng bộ lại từ node khác
         else:
             self.ledger = []
             self._create_genesis_block()
@@ -119,14 +158,16 @@ class BlockchainManager:
             "nonce": 0
         }
         genesis_block["hash"] = self.calculate_hash(genesis_block)
+        # Ký SAU KHI tính hash (hoặc ít nhất là sau khi các trường cố định)
+        genesis_block["signature"] = self._sign_block(genesis_block)
         self.ledger.append(genesis_block)
         self._save_ledger()
-        logger.info("Đã khởi tạo Genesis Block.")
+        logger.info(f"Đã khởi tạo Genesis Block cho node: {self.node_name}")
 
     def calculate_hash(self, block):
         """Tính toán mã băm SHA-256 cho một khối."""
-        # Tạo một bản sao để không ảnh hưởng đến khối gốc và loại bỏ trường hash nếu có
-        block_copy = {k: v for k, v in block.items() if k != "hash"}
+        # Tạo một bản sao để không ảnh hưởng đến khối gốc và loại bỏ trường hash/signature nếu có
+        block_copy = {k: v for k, v in block.items() if k not in ["hash", "signature"]}
         # Đảm bảo thứ tự các key là cố định để hash luôn giống nhau
         block_string = json.dumps(block_copy, sort_keys=True).encode()
         return hashlib.sha256(block_string).hexdigest()
@@ -144,16 +185,11 @@ class BlockchainManager:
             block["nonce"] += 1
 
     def _save_ledger(self):
-        """Lưu ledger và cập nhật chữ ký HMAC."""
+        """Lưu ledger vào file JSON."""
         os.makedirs(os.path.dirname(self.ledger_path), exist_ok=True)
-        content = json.dumps(self.ledger, indent=4)
         with open(self.ledger_path, "w", encoding="utf-8") as f:
-            f.write(content)
-        # Ký file sau khi ghi
-        sig = self._sign_ledger(content)
-        with open(self.sig_path, "w") as f:
-            f.write(sig)
-        logger.debug("Da luu ledger va cap nhat chu ky HMAC.")
+            json.dump(self.ledger, f, indent=4)
+        logger.debug(f"Da luu ledger cho node {self.node_name}.")
 
     def _load_wallets(self):
         """Tải dữ liệu ví từ file JSON."""
@@ -190,7 +226,7 @@ class BlockchainManager:
         Ghi nhận bản quyền với Dual-Hash, pHash, wHash và ORB Features.
         """
         # Kiểm tra tính toàn vẹn của chuỗi hiện tại trước khi ghi mới
-        if not self._verify_ledger_signature(json.dumps(self.ledger, indent=4)):
+        if not self.is_chain_valid():
             return False, "Hệ thống bị can thiệp! Không thể ghi dữ liệu mới."
 
         if isinstance(hash_list, str):
@@ -222,8 +258,14 @@ class BlockchainManager:
         logger.info(f"Đang đào khối mới cho {owner_name}...")
         new_block = self.proof_of_work(new_block)
         
+        # Ký khối SAU KHI đào (để chốt nonce và hash)
+        new_block["signature"] = self._sign_block(new_block)
+        
         self.ledger.append(new_block)
         self._save_ledger()
+        
+        # --- BƯỚC MỚI: Phát sóng khối này đến mọi Node khác ---
+        self.broadcast_block(new_block)
         
         # Tặng thưởng sau khi đào khối thành công
         reward_given = self.grant_reward(owner_name)
@@ -249,12 +291,66 @@ class BlockchainManager:
                 logger.error(f"Loi: Khoi {i} khong lien ket dung voi khoi {i-1}!")
                 return False
 
-            # 3. Proof of Work phải thỏa mãn difficulty hiện tại
+            # 3. Chữ ký số phải hợp lệ
+            if not self._verify_block_signature(current_block):
+                logger.error(f"Loi: Chu ky cua khoi {i} khong hop le!")
+                return False
+                
+            # 4. Proof of Work phải thỏa mãn difficulty hiện tại
             if not current_block["hash"].startswith(pow_prefix):
                 logger.error(f"Loi: Khoi {i} khong thoa man Proof of Work (difficulty={self.difficulty})!")
                 return False
 
         return True
+
+    def broadcast_block(self, block):
+        """Phát sóng khối mới đến tất cả các node khác trong hệ thống."""
+        all_nodes = self.list_all_nodes()
+        peers = [node for node in all_nodes if node != self.node_name]
+        
+        for peer in peers:
+            try:
+                # Giả lập gửi qua mạng bằng cách khởi tạo Manager của peer và gọi nhận khối
+                peer_bm = BlockchainManager(self.config, node_name=peer)
+                peer_bm.receive_block(block)
+            except Exception as e:
+                logger.error(f"Loi khi broadcast den {peer}: {e}")
+
+    def receive_block(self, block):
+        """Nhận và kiểm tra khối từ node khác."""
+        # 1. Kiểm tra xem khối đã tồn tại chưa
+        for b in self.ledger:
+            if b["hash"] == block["hash"]:
+                return False # Đã có rồi
+        
+        # 2. Kiểm tra chỉ số Index (phải là kế tiếp)
+        if block["index"] != len(self.ledger):
+            logger.warning(f"Node {self.node_name} tu choi khoi {block['index']} do sai Index (can {len(self.ledger)})")
+            return False
+
+        # 3. Xác thực chữ ký (hàm verify_block_signature sẽ tự tìm Public Key của owner)
+        if not self._verify_block_signature(block):
+            logger.error(f"Node {self.node_name} phat hien chu ky gia mau tu owner: {block.get('owner')}")
+            return False
+            
+        # 4. Kiểm tra liên kết Hash
+        if block["previous_hash"] != self.ledger[-1]["hash"]:
+            logger.error(f"Node {self.node_name} tu choi khoi {block['index']} do sai lien ket hash")
+            return False
+
+        # Nếu mọi thứ OK, thêm vào sổ cái
+        self.ledger.append(block)
+        self._save_ledger()
+        logger.info(f"Node {self.node_name} da dong bo va chap nhan khoi moi tu {block.get('owner')}")
+        return True
+
+    @staticmethod
+    def list_all_nodes():
+        """Liệt kê danh sách tất cả các node hiện có."""
+        nodes_dir = "nodes"
+        if not os.path.exists(nodes_dir):
+            return []
+        return [d for d in os.listdir(nodes_dir) if os.path.isdir(os.path.join(nodes_dir, d))]
 
     def verify_copyright(self, image_hash, current_p_hash=None, current_w_hash=None, current_image=None):
         """

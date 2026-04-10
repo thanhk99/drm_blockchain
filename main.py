@@ -86,7 +86,7 @@ class DRMAppGUI:
         # Khởi tạo backend
         self.config = load_config("config.yaml")
         self.security = SecurityEngine()
-        self.blockchain = BlockchainManager(self.config)
+        self.blockchain = BlockchainManager(self.config, node_name="System")
         self.drm = DRMManager(self.config)
         self.hasher = ImageHasher()
         self.output_dir = "protected_images"
@@ -136,8 +136,11 @@ class DRMAppGUI:
         
         tk.Label(btn_frame, text="---", bg="#2c3e50", fg="#7f8c8d").pack(pady=5)
         tk.Button(btn_frame, text="4. Kiểm tra Blockchain", command=self._check_blockchain_integrity, 
-                  font=("Helvetica", 10), width=20, pady=5, bg="#95a5a6", fg="white", activebackground="#7f8c8d").pack(pady=5)
+                   font=("Helvetica", 10), width=20, pady=5, bg="#95a5a6", fg="white", activebackground="#7f8c8d").pack(pady=5)
         
+        self.node_info = tk.Label(btn_frame, text="Node: System", bg="#2c3e50", fg="#3498db", font=("Helvetica", 10, "bold"))
+        self.node_info.pack(pady=10)
+
         tk.Button(btn_frame, text="Thoát", command=self.root.quit, bg="#e74c3c", fg="white", width=20).pack(pady=10)
 
         # Log Frame
@@ -293,10 +296,14 @@ class DRMAppGUI:
 
             user = self.security.authenticate(frame)
             if user != "Unknown" and user != "Guest":
+                # Chuyển đổi Node sang người dùng hiện tại
+                self.blockchain = BlockchainManager(self.config, node_name=user)
+                self.node_info.config(text=f"Node: {user}")
+                
                 balance = self.blockchain.get_balance(user)
-                self.log(f"Xác thực thành công: CHÀO {user.upper()}")
+                self.log(f"Xác thực thành công: Đã chuyển sang Node của {user.upper()}")
                 self.log(f"Số dư Ví: {balance} DRM Coins")
-                messagebox.showinfo("FaceID", f"Xin chào {user}!\nSố dư hiện tại: {balance} DRM Coins")
+                messagebox.showinfo("FaceID", f"Xin chào {user}!\nĐã kết nối vào Sổ cái riêng của bạn.\nSố dư hiện tại: {balance} DRM Coins")
             else:
                 self.log("Cảnh báo: Không nhận diện được người dùng.")
                 messagebox.showwarning("FaceID", "Không nhận diện được khuôn mặt.")
@@ -374,7 +381,8 @@ class DRMAppGUI:
                 with open(output_path, "wb") as f:
                     f.write(buffer)
                 self.log(f"HOÀN TẤT! File bảo vệ: {output_path}")
-                messagebox.showinfo("Thành công", f"Đã đăng ký bản quyền!\n\nLưu tại: {output_path}\nĐã kích hoạt bảo vệ mức Cao (Kháng xoay/thu phóng).")
+                self.log("HỆ THỐNG: Đã phát sóng (Broadcast) bản ghi bản quyền cho toàn mạng lưới.")
+                messagebox.showinfo("Thành công", f"Đã đăng ký bản quyền!\n\nLưu tại: {output_path}\nĐã kích hoạt bảo vệ mức Cao và đồng bộ mạng lưới.")
             else:
                 self.log("Lỗi: Không thể xuất file ảnh bảo vệ.")
 
@@ -397,8 +405,21 @@ class DRMAppGUI:
             current_p_hash = self.hasher.get_perceptual_hash(img_data)
             current_w_hash = self.hasher.get_wavelet_hash(img_data)
             
-            # Xác thực đa tầng
+            # Xác thực đa tầng trên Node hiện tại
             found, record, match_type = self.blockchain.verify_copyright(content_hash, current_p_hash, current_w_hash, img_data)
+            
+            # NẾU không tìm thấy ở node hiện tại, quét qua TẤT CẢ các node khác
+            if not found:
+                self.log("Không tìm thấy trong sổ cái hiện tại. Đang quét toàn mạng lưới...")
+                all_nodes = BlockchainManager.list_all_nodes()
+                for node_name in all_nodes:
+                    if node_name == self.blockchain.node_name: continue
+                    
+                    temp_bm = BlockchainManager(self.config, node_name=node_name)
+                    found, record, match_type = temp_bm.verify_copyright(content_hash, current_p_hash, current_w_hash, img_data)
+                    if found:
+                        self.log(f"Tìm thấy bản quyền tại Node: {node_name}")
+                        break
             
             if found:
                 self.log(f">>> KẾT QUẢ: XÁC THỰC THÀNH CÔNG! ({match_type})")
