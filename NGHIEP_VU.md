@@ -1,4 +1,4 @@
-# 📋 Tài Liệu Nghiệp Vụ — Hệ Thống Bảo Vệ Bản Quyền Số
+# Tài Liệu Nghiệp Vụ — Hệ Thống Bảo Vệ Bản Quyền Số
 
 ## Tổng Quan
 

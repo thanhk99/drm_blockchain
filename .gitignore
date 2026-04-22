@@ -164,3 +164,5 @@ models/blockchain_ledger.json
 .Trashes
 ehthumbs.db
 Thumbs.db
+
+*.md
