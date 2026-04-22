@@ -152,8 +152,6 @@ cython_debug/
 # Bỏ qua các tệp blockchain ledger giả lập nếu nó quá lớn hoặc lưu dữ liệu testing
 models/blockchain_ledger.json
 
-# Bỏ qua các tệp ảnh được bảo vệ/đầu ra
-protected_images/
 
 # Bỏ qua các cấu hình cá nhân nếu có secrets
 # config.yaml (Tùy chọn: Uncomment nếu bạn muốn bỏ qua tệp config này)

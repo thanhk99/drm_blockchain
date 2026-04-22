@@ -1,0 +1,17 @@
+[
+    {
+        "index": 0,
+        "timestamp": 1712644800.0,
+        "hashes": [
+            "0"
+        ],
+        "p_hash": "0",
+        "w_hash": "0",
+        "orb_features": null,
+        "owner": "SYSTEM",
+        "previous_hash": "0",
+        "nonce": 0,
+        "hash": "d9c412a51819cb69177977cb3369b5f0464c6adba92f6fe2b577372770d11125",
+        "signature": "i7iNVTL3HwjKLIsmF7TXk09cdxnt6BiIlnDEXIZrQ/P83jqGdhe7i5DVZg3J2NdrnWOf1mcI7FvUvDC73cN+Aw=="
+    }
+]

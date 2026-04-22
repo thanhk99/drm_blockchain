@@ -139,7 +139,8 @@ class BlockchainManager:
             # Kiểm tra tính toàn vẹn của chuỗi (bao gồm chữ ký số) ngay khi tải
             if not self.is_chain_valid():
                 logger.error(f"CANH BAO BAO MAT: Sổ cái của node {self.node_name} bị can thiệp trái phép!")
-                # Trong thực tế sẽ cần cơ chế đồng bộ lại từ node khác
+                # Giữ nguyên sổ cái bị lỗi trong RAM để ứng dụng không bị crash. 
+                # Hệ thống sẽ tự động chặn việc thêm khối mới (trong register_copyright)
         else:
             self.ledger = []
             self._create_genesis_block()
@@ -276,6 +277,18 @@ class BlockchainManager:
 
     def is_chain_valid(self):
         """Kiểm tra tính toàn vẹn của toàn bộ chain."""
+        if not self.ledger:
+            return False
+            
+        # Kiểm tra riêng Genesis Block (Block 0)
+        genesis_block = self.ledger[0]
+        if genesis_block["hash"] != self.calculate_hash(genesis_block):
+            logger.error("Loi: Genesis Block (Khoi 0) bi thay doi noi dung hoac hash khong khop!")
+            return False
+        if not self._verify_block_signature(genesis_block):
+            logger.error("Loi: Chu ky cua Genesis Block (Khoi 0) khong hop le!")
+            return False
+
         pow_prefix = "0" * self.difficulty
         for i in range(1, len(self.ledger)):
             current_block = self.ledger[i]
